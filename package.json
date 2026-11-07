@@ -1,0 +1,1 @@
+{"name":"grust-online-prototype","version":"0.1.0","private":true,"description":"GRUST WebSocket movement prototype","engines":{"node":">=20"},"scripts":{"start":"node server.js"},"dependencies":{"ws":"8.17.1"}}

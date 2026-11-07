@@ -1,0 +1,28 @@
+// Fifty fixed, original survivor profiles. Their IDs are stable across versions.
+const CHARACTER_SKINS=['#f0c4a3','#e2aa84','#ce8d6c','#bf7958','#a86e4f','#966044','#805039','#6c4231','#5a392b','#483025'];
+const CHARACTER_HAIR=['#2d211c','#4b3022','#704b31','#a47b4a','#d2b078','#202528','#8c352c','#767879','#b78658','#c6c3a9'];
+const CHARACTER_EYES=['#372921','#486b75','#60764d','#80583d','#889596','#4a3230','#987c4b'];
+const CHARACTER_SHIRTS=['#68735a','#686354','#555e5d','#776254','#4e655c','#626a4b','#605862','#77705f'];
+const CHARACTERS=Array.from({length:50},(_,id)=>{let skinIndex=id%10,group=Math.floor(id/10);return Object.freeze({id,skin:CHARACTER_SKINS[skinIndex],hair:CHARACTER_HAIR[(skinIndex*3+group*7)%10],eyes:CHARACTER_EYES[(id*5+group)%7],hairStyle:(skinIndex+group*3)%8,body:(skinIndex*3+group)%4,shirt:CHARACTER_SHIRTS[(skinIndex*5+group*3)%8],tattoo:(id*7+3)%6===0,scar:(id*3+group)%7===0,beard:(id*5+group)%9===1})});
+function characterForId(id){return CHARACTERS[Number.isInteger(id)&&id>=0&&id<50?id:0]}
+function shadeColor(color,factor){let s=color.replace('#','');return '#'+[0,2,4].map(i=>Math.max(0,Math.min(255,Math.round(parseInt(s.slice(i,i+2),16)*factor))).toString(16).padStart(2,'0')).join('')}
+function skinPalette(avatar){return [avatar.skin,shadeColor(avatar.skin,.77),shadeColor(avatar.skin,1.12)]}
+function randomCharacterId(){const limit=Math.floor(4294967296/50)*50;let v=new Uint32Array(1);do crypto.getRandomValues(v);while(v[0]>=limit);return v[0]%50}
+
+// A generated portrait is used in the inventory; every account keeps its stable profile ID.
+function characterPortrait(a){
+ const width=[48,60,72,83][a.body], shoulder=width+26, belly=a.body===3?19:a.body===2?4:1;
+ let hairPaths=['','M85 43 Q100 22 115 43 L114 51 Q103 41 87 52 Z','M84 44 Q88 20 101 24 Q115 22 117 47 L112 49 Q103 34 87 51 Z','M83 43 Q82 17 100 20 Q119 17 117 53 L112 68 L110 42 Q98 35 86 52 L87 68 L82 55 Z','M84 44 Q84 22 100 23 Q117 22 117 45 L110 39 L105 33 L100 41 L93 33 L87 50 Z','M84 42 Q85 25 100 23 Q116 25 116 42 L113 43 Q100 37 87 46 Z','M83 44 Q86 17 102 20 Q118 22 118 48 L111 46 Q106 31 86 48 Z','M84 45 Q85 22 100 23 Q116 23 116 45 L111 39 L107 46 L102 37 L95 45 L90 38 L85 50 Z'];
+ return `<svg viewBox="0 0 200 430" role="img" aria-label="Персонаж ${a.id+1}"><defs><linearGradient id="skinShade"><stop stop-color="${shadeColor(a.skin,.78)}"/><stop offset=".45" stop-color="${a.skin}"/><stop offset="1" stop-color="${shadeColor(a.skin,.86)}"/></linearGradient><linearGradient id="shirtShade"><stop stop-color="${shadeColor(a.shirt,.65)}"/><stop offset=".5" stop-color="${a.shirt}"/><stop offset="1" stop-color="${shadeColor(a.shirt,.72)}"/></linearGradient></defs>
+ <ellipse cx="100" cy="420" rx="58" ry="5" fill="#111" opacity=".3"/>
+ <path d="M${100-width/2} 234 L${100+width/2} 234 L${100+width/2-2} 337 L${100+width/2-5} 398 L108 398 L100 279 L92 398 L${100-width/2+5} 398 L${100-width/2+2} 337 Z" fill="url(#skinShade)" stroke="#0003" stroke-width="2"/>
+ <path d="M${100-width/2+4} 393 h24 l-2 20 q-4 6 -29 4 l0 -9z M${100+width/2-28} 393 h24 l7 15 v9 q-25 2 -29 -4z" fill="url(#skinShade)" stroke="#0003"/>
+ <path d="M${100-shoulder/2} 99 Q${75-width/3} 107 ${67-width/3} 150 L${65-width/3} 211 Q${67-width/3} 225 ${76-width/3} 220 L${83-width/3} 157 L${100-width/2} 139 L${100-width/2} 235 Q100 ${240+belly} ${100+width/2} 235 L${100+width/2} 139 L${117+width/3} 157 L${124+width/3} 220 Q${133+width/3} 225 ${135+width/3} 211 L${133+width/3} 150 Q${125+width/3} 107 ${100+shoulder/2} 99 L113 91 L87 91 Z" fill="url(#skinShade)" stroke="#0004" stroke-width="2"/>
+ <path d="M${100-shoulder/2} 100 L88 92 Q100 104 112 92 L${100+shoulder/2} 100 L${118+width/3} 129 L${100+width/2} 139 L${100+width/2+belly/2} 234 Q100 ${243+belly} ${100-width/2-belly/2} 234 L${100-width/2} 139 L${82-width/3} 129 Z" fill="url(#skinShade)" stroke="#0002" stroke-width="2"/>
+ <path d="M${100-width/2} 216 Q100 ${222+belly} ${100+width/2} 216 L${100+width/2} 251 Q${100+width/4} 259 103 249 L100 245 L97 249 Q${100-width/4} 259 ${100-width/2} 251 Z" fill="#353d40" stroke="#202629" stroke-width="2"/><path d="M${100-width/2} 220 Q100 ${226+belly} ${100+width/2} 220" fill="none" stroke="#737875" stroke-width="3"/>
+ <path d="M${100-width/2+7} 132 Q${100-width/4} 143 98 137 M102 137 Q${100+width/4} 143 ${100+width/2-7} 132 M100 140 L100 201" fill="none" stroke="#412c2580" stroke-width="1.5" opacity="${a.body===2?'.55':'.24'}"/>
+ ${a.body===2?'<path d="M85 162 q7 4 12 0 M103 162 q7 4 12 0 M86 175 q6 4 11 0 M103 175 q6 4 11 0" stroke="#51382f" opacity=".28" fill="none" stroke-width="1.3"/>':''}
+ <path d="M91 80 L91 96 Q100 104 109 96 L109 80" fill="url(#skinShade)"/><path d="M85 44 Q84 28 100 28 Q116 28 115 44 L113 70 Q110 84 100 88 Q90 84 87 70 Z" fill="url(#skinShade)" stroke="#0003"/>
+ <path d="${hairPaths[a.hairStyle]}" fill="${a.hair}"/><path d="M88 57 L96 56 M104 56 L112 57" stroke="${a.hair}" stroke-width="2"/><ellipse cx="92" cy="60" rx="3" ry="2" fill="#e5ded0"/><ellipse cx="108" cy="60" rx="3" ry="2" fill="#e5ded0"/><circle cx="92" cy="60" r="1.4" fill="${a.eyes}"/><circle cx="108" cy="60" r="1.4" fill="${a.eyes}"/><path d="M100 61 l-2 9 4 0 M95 77 Q100 79 105 77" fill="none" stroke="#49352c" stroke-width="1"/>
+ ${a.beard?`<path d="M87 69 Q90 86 100 88 Q111 86 113 69 Q109 78 104 79 L100 76 L96 79 Q91 78 87 69" fill="${a.hair}" opacity=".85"/>`:''}${a.scar?'<path d="M106 51 l-5 17 M107 54 l-3 1 M105 61 l-3 1" stroke="#d5a19b" stroke-width="1.4"/>':''}${a.tattoo?`<path d="M${72-width/3} 154 l8 5 -7 6 7 5 -7 6 6 4" fill="none" stroke="#283731" stroke-width="3" opacity=".8"/>`:''}</svg>`;
+}
