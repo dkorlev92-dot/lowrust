@@ -1,36 +1,39 @@
 'use strict';
-// Presence-only prototype: no shared combat, authentication, or persistent world.
+// Experimental online shooting: server-authoritative ammo, fire cadence and damage.
+// Movement is still client-reported; this is not a complete anti-cheat system.
 const http=require('http'),fs=require('fs'),path=require('path'),crypto=require('crypto');
-const {WebSocketServer,WebSocket}=require('ws');
-const root=__dirname,port=Number(process.env.PORT)||10000,MAX_PLAYERS=20;
+const {WebSocketServer,WebSocket}=require('ws');const {createWorld,isSafe}=require('./world-collision');
+const root=__dirname,port=Number(process.env.PORT)||10000,MAX_PLAYERS=20,MAX_REWIND=200,INTERPOLATION=80,MAX_DISTANCE=100;
 const files=new Set(['index.html','style.css','characters.js','drawn-walls.js','game.js','account.js','online.js']);
 const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.webp':'image/webp','.png':'image/png'};
-const server=http.createServer((req,res)=>{
- if(req.method!=='GET'&&req.method!=='HEAD'){res.writeHead(405);return res.end()}
- let name;try{name=decodeURIComponent(new URL(req.url,'http://localhost').pathname).replace(/^\/+/, '')||'index.html'}catch{return res.writeHead(400).end()}
- if(!files.has(name)&&!/^icons\/[A-Za-z0-9_-]+\.(webp|png)$/.test(name))return res.writeHead(404).end();
- const file=path.join(root,name);fs.stat(file,(err,stat)=>{if(err||!stat.isFile())return res.writeHead(404).end();res.writeHead(200,{'Content-Type':types[path.extname(file)]||'application/octet-stream','X-Content-Type-Options':'nosniff','Cache-Control':'no-cache'});if(req.method==='HEAD')return res.end();fs.createReadStream(file).pipe(res)});
-});
+const server=http.createServer((req,res)=>{if(req.method!=='GET'&&req.method!=='HEAD')return res.writeHead(405).end();let name;try{name=decodeURIComponent(new URL(req.url,'http://localhost').pathname).replace(/^\/+/, '')||'index.html'}catch{return res.writeHead(400).end()}if(!files.has(name)&&!/^icons\/[A-Za-z0-9_-]+\.(webp|png)$/.test(name))return res.writeHead(404).end();const file=path.join(root,name);fs.stat(file,(err,stat)=>{if(err||!stat.isFile())return res.writeHead(404).end();res.writeHead(200,{'Content-Type':types[path.extname(file)]||'application/octet-stream','X-Content-Type-Options':'nosniff','Cache-Control':'no-cache'});if(req.method==='HEAD')return res.end();fs.createReadStream(file).pipe(res)})});
 const wss=new WebSocketServer({server,path:'/ws',maxPayload:4096,perMessageDeflate:false}),players=new Map();
+const guns={rifle:{damage:25,interval:130,reserve:'ammo'},smg:{damage:18,interval:100,reserve:'pistolAmmo'},revolver:{damage:35,interval:400,reserve:'pistolAmmo'}};
+const allowItems=new Set(['rock','torch','rifle','smg','revolver']);
 function send(ws,obj){if(ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify(obj))}
-function number(v,min,max){return typeof v==='number'&&Number.isFinite(v)?Math.min(max,Math.max(min,v)):null}
-function publicPlayer(p){return {id:p.id,name:p.name,avatar:p.avatar,x:p.x,y:p.y,z:p.z,yaw:p.yaw,pitch:p.pitch,held:p.held}}
-const allowItems=new Set(['rock','rock__skull','torch','rifle','rifle__ice','rifle__aurora','rifle__ember','rifle__forest','smg','smg__aurora','smg__sunset','smg__void','revolver','hatchet','pickaxe','hammer','spear','plan','bow','c4','launcher','signal','furnace','cupboard','workbench','wooddoor','metaldoor','lock','bandage','storage','sleepingbag']);
-wss.on('connection',(ws,req)=>{
- // Browser same-origin check protects the demo from other websites using it as a socket backend.
- if(req.headers.origin){try{if(new URL(req.headers.origin).host!==req.headers.host){ws.close(1008,'Origin rejected');return}}catch{ws.close(1008,'Origin rejected');return}}
- if(players.size>=MAX_PLAYERS){send(ws,{type:'full'});ws.close(1008,'Server full');return}
- let p={id:crypto.randomUUID(),name:'Игрок',avatar:0,x:0,y:1.7,z:-27,yaw:0,pitch:0,held:'rock',joined:false,window:Date.now(),messages:0,alive:true};players.set(ws,p);
- ws.on('pong',()=>p.alive=true);
- ws.on('error',()=>{});
- ws.on('message',raw=>{let now=Date.now();if(now-p.window>=1000){p.window=now;p.messages=0}if(++p.messages>60){ws.close(1008,'Rate limit');return}let m;try{m=JSON.parse(raw.toString())}catch{return}if(!m||typeof m!=='object')return;
-  if(m.type==='hello'&&!p.joined){p.name=String(m.name||'Игрок').replace(/[^\p{L}\p{N}_-]/gu,'').slice(0,24)||'Игрок';p.avatar=Number.isInteger(m.avatar)?Math.max(0,Math.min(49,m.avatar)):0;p.joined=true;send(ws,{type:'welcome',id:p.id,limit:MAX_PLAYERS});return}
-  if(!p.joined)return;
-  if(m.type==='ping'){if(typeof m.n==='number'&&Number.isFinite(m.n))send(ws,{type:'pong',n:m.n});return}
-  if(m.type==='state'){let x=number(m.x,-245,245),y=number(m.y,-5,20),z=number(m.z,-245,245),yaw=number(m.yaw,-1e6,1e6),pitch=number(m.pitch,-1.57,1.57);if([x,y,z,yaw,pitch].includes(null))return;if(Math.hypot(x,z)>246)return;Object.assign(p,{x,y,z,yaw,pitch,held:allowItems.has(m.held)?m.held:null})}
- });
- ws.on('close',()=>players.delete(ws));
+function num(v,min,max){return typeof v==='number'&&Number.isFinite(v)?Math.min(max,Math.max(min,v)):null}
+function box(x,y,z,w,h,d){return {min:[x-w/2,y,z-d/2],max:[x+w/2,y+h,z+d/2]}}
+function objectBox(o){let w=1.2,d=1.2,h=1.4;if(o.type==='tree'){w=d=.9;h=5}else if(['stone','metalOre','sulfurOre'].includes(o.type)){w=d=2.2;h=1.4}else if(o.type==='barrel'){w=d=1.04;h=1.5}return box(o.x,0,o.z,w,h,d)}
+const obstacles=createWorld().map(objectBox);obstacles.push(box(15,0,10,7,3.4,5),box(-43,0,20,11,4,7));
+function rayBox(origin,dir,b,limit=MAX_DISTANCE){let lo=0,hi=limit;for(let i=0;i<3;i++){if(Math.abs(dir[i])<1e-8){if(origin[i]<b.min[i]||origin[i]>b.max[i])return Infinity;continue}let a=(b.min[i]-origin[i])/dir[i],c=(b.max[i]-origin[i])/dir[i];if(a>c)[a,c]=[c,a];lo=Math.max(lo,a);hi=Math.min(hi,c);if(lo>hi)return Infinity}return hi>=0?lo:Infinity}
+function self(p,now=Date.now()){return {type:'self',health:p.health,magazines:p.magazines,reserves:p.reserves,reloading:p.reload?{key:p.reload.key,remaining:Math.max(0,p.reload.end-now)}:null}}
+function pub(p){return {id:p.id,name:p.name,avatar:p.avatar,x:p.x,y:p.y,z:p.z,yaw:p.yaw,pitch:p.pitch,crouch:p.crouch,held:p.held}}
+function pushHistory(p,now){p.history.push({t:now,x:p.x,y:p.y,z:p.z,crouch:p.crouch,generation:p.generation});while(p.history.length>2&&p.history[1].t<now-400)p.history.shift()}
+function rewind(p,t){let h=p.history.filter(h=>h.generation===p.generation);if(!h.length)return p;let before=h[0],after=h[h.length-1];for(let i=1;i<h.length;i++)if(h[i].t>=t){before=h[i-1];after=h[i];break}let f=after.t===before.t?0:Math.max(0,Math.min(1,(t-before.t)/(after.t-before.t)));return {x:before.x+(after.x-before.x)*f,y:before.y+(after.y-before.y)*f,z:before.z+(after.z-before.z)*f,crouch:before.crouch+(after.crouch-before.crouch)*f}}
+function resetCombat(p){p.health=100;p.magazines={rifle:20,smg:20,revolver:20};p.reserves={ammo:120,pistolAmmo:120};p.reload=null;p.lastShot=0}
+function spawn(p,index){let angle=index*Math.PI*2/20;p.x=Math.cos(angle)*2;p.z=-27+Math.sin(angle)*2;p.y=1.7;p.yaw=0;p.pitch=0;p.crouch=0;p.held='rock';p.history=[]}
+function shoot(ws,p,now){let k=p.held,def=guns[k];if(!def||p.reload||p.magazines[k]<=0||now-p.lastShot<def.interval||isSafe(p.x,p.z))return;p.lastShot=now;p.magazines[k]--;for(let [otherWs,q] of players)if(q!==p&&q.joined&&Math.hypot(q.x-p.x,q.z-p.z)<65)send(otherWs,{type:'shot',id:p.id,x:p.x,z:p.z});let cp=Math.cos(p.pitch),origin=[p.x,p.y,p.z],dir=[Math.sin(p.yaw)*cp,Math.sin(p.pitch),Math.cos(p.yaw)*cp],nearest=MAX_DISTANCE;for(let b of obstacles)nearest=Math.min(nearest,rayBox(origin,dir,b,nearest));let victim=null,victimWs=null,rewindMs=Math.min(MAX_REWIND,Math.max(0,p.rtt/2)+INTERPOLATION);for(let [otherWs,q] of players){if(q===p||!q.joined||isSafe(q.x,q.z))continue;let old=rewind(q,now-rewindMs);if(isSafe(old.x,old.z))continue;let foot=old.y-(1.7-.55*old.crouch),height=1.85-.45*old.crouch,d=rayBox(origin,dir,box(old.x,foot,old.z,.75,height,.75),nearest);if(d<nearest){nearest=d;victim=q;victimWs=otherWs}}
+ if(victim){victim.health=Math.max(0,victim.health-def.damage);send(ws,{type:'hit',damage:def.damage,remaining:victim.health});if(victim.health<=0){let name=victim.name;victim.generation++;spawn(victim,victim.spawnIndex);resetCombat(victim);send(victimWs,{type:'respawn',generation:victim.generation,x:victim.x,y:victim.y,z:victim.z});send(victimWs,self(victim,now));send(ws,{type:'elimination',name})}else send(victimWs,self(victim,now))}send(ws,self(p,now))}
+wss.on('connection',(ws,req)=>{if(req.headers.origin){try{if(new URL(req.headers.origin).host!==req.headers.host){ws.close(1008,'Origin rejected');return}}catch{ws.close(1008,'Origin rejected');return}}if(players.size>=MAX_PLAYERS){send(ws,{type:'full'});ws.close(1008,'Server full');return}let spawnIndex=[...Array(MAX_PLAYERS).keys()].find(i=>![...players.values()].some(p=>p.spawnIndex===i));let p={id:crypto.randomUUID(),name:'Игрок',avatar:0,joined:false,window:Date.now(),messages:0,alive:true,rtt:0,pingAt:0,generation:0,spawnIndex};resetCombat(p);spawn(p,spawnIndex);players.set(ws,p);
+ ws.on('pong',()=>{p.alive=true;if(p.pingAt)p.rtt=Math.max(0,Math.min(1000,Date.now()-p.pingAt))});ws.on('error',()=>{});
+ ws.on('message',raw=>{let now=Date.now();if(now-p.window>=1000){p.window=now;p.messages=0}if(++p.messages>80){ws.close(1008,'Rate limit');return}let m;try{m=JSON.parse(raw.toString())}catch{return}if(!m||typeof m!=='object')return;
+ if(m.type==='hello'&&!p.joined){p.name=String(m.name||'Игрок').replace(/[^\p{L}\p{N}_-]/gu,'').slice(0,24)||'Игрок';p.avatar=Number.isInteger(m.avatar)?Math.max(0,Math.min(49,m.avatar)):0;p.joined=true;pushHistory(p,now);send(ws,{type:'welcome',id:p.id,limit:MAX_PLAYERS,generation:p.generation,x:p.x,y:p.y,z:p.z});send(ws,self(p,now));return}
+ if(!p.joined)return;if(m.type==='ping'){if(typeof m.n==='number'&&Number.isFinite(m.n))send(ws,{type:'pong',n:m.n});return}
+ if(m.type==='state'){if(m.generation!==p.generation)return;let x=num(m.x,-245,245),y=num(m.y,-5,20),z=num(m.z,-245,245),yaw=num(m.yaw,-1e6,1e6),pitch=num(m.pitch,-1.57,1.57),crouch=num(m.crouch,0,1);if([x,y,z,yaw,pitch,crouch].includes(null)||Math.hypot(x,z)>246)return;Object.assign(p,{x,y,z,yaw,pitch,crouch,held:allowItems.has(m.held)?m.held:null});return}
+ if(m.type==='shoot'&&m.generation===p.generation){shoot(ws,p,now);return}
+ if(m.type==='reload'&&m.generation===p.generation){let k=p.held,d=guns[k];if(d&&!p.reload&&p.magazines[k]<20&&p.reserves[d.reserve]>0){p.reload={key:k,end:now+1800};send(ws,self(p,now))}return}
+ });ws.on('close',()=>players.delete(ws));
 });
-const tick=setInterval(()=>{let all=[...players.values()].filter(p=>p.joined).map(publicPlayer),msg=JSON.stringify({type:'snapshot',players:all});for(let [ws,p] of players)if(p.joined&&ws.readyState===WebSocket.OPEN&&ws.bufferedAmount<65536)ws.send(msg)},50);
-const heartbeat=setInterval(()=>{for(let [ws,p] of players){if(!p.alive){ws.terminate();continue}p.alive=false;ws.ping()}},30000);
-server.on('close',()=>{clearInterval(tick);clearInterval(heartbeat)});server.listen(port,'0.0.0.0',()=>console.log(`GRUST online prototype listening on ${port}`));
+const tick=setInterval(()=>{let now=Date.now(),active=[...players.values()].filter(p=>p.joined);for(let p of active){if(p.reload&&now>=p.reload.end){let k=p.reload.key,d=guns[k],n=Math.min(20-p.magazines[k],p.reserves[d.reserve]);p.magazines[k]+=n;p.reserves[d.reserve]-=n;p.reload=null}pushHistory(p,now)}let msg=JSON.stringify({type:'snapshot',players:active.map(pub)});for(let [ws,p] of players)if(p.joined&&ws.readyState===WebSocket.OPEN&&ws.bufferedAmount<65536){ws.send(msg);send(ws,self(p,now))}},50);
+const heartbeat=setInterval(()=>{for(let [ws,p] of players){if(!p.alive){ws.terminate();continue}p.alive=false;p.pingAt=Date.now();ws.ping()}},3000);
+server.on('close',()=>{clearInterval(tick);clearInterval(heartbeat)});server.listen(port,'0.0.0.0',()=>console.log(`GRUST combat test listening on ${port}`));
